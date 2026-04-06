@@ -454,18 +454,25 @@ const fireStorage = firebase.storage();
 const ST_PROFIT  = 'profitFiles';
 const ST_FINANCE = 'financeFiles';
 
+function arrayBufferToBase64(buf) {
+  const bytes = new Uint8Array(buf);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary);
+}
+function base64ToArrayBuffer(b64) {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes.buffer;
+}
+
 async function dbSave(collection, id, fileName, arrayBuffer) {
   try {
-    // 1) Storage에 파일 업로드 (Blob 변환)
-    const path = `${collection}/${id}.xlsx`;
-    const ref = fireStorage.ref(path);
-    const blob = new Blob([new Uint8Array(arrayBuffer)], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-    const snap = await ref.put(blob);
-    const downloadURL = await snap.ref.getDownloadURL();
-
-    // 2) Firestore에 메타데이터 저장
+    const b64 = arrayBufferToBase64(arrayBuffer);
     await fireDb.collection(collection).doc(id).set({
-      id, fileName, downloadURL, path,
+      id, fileName,
+      fileData: b64,
       sizeBytes: arrayBuffer.byteLength,
       savedAt: new Date().toISOString()
     });
@@ -482,31 +489,16 @@ async function dbLoadAll(collection) {
   for (const doc of snap.docs) {
     const meta = doc.data();
     try {
-      // Firebase Storage SDK로 다운로드 URL 가져오기
-      const url = await fireStorage.ref(meta.path).getDownloadURL();
-      const xhr = new XMLHttpRequest();
-      const buf = await new Promise((resolve, reject) => {
-        xhr.responseType = 'arraybuffer';
-        xhr.onload = () => resolve(xhr.response);
-        xhr.onerror = () => reject(new Error('다운로드 실패'));
-        xhr.open('GET', url);
-        xhr.send();
-      });
-      results.push({ id: meta.id, fileName: meta.fileName, data: buf, savedAt: meta.savedAt, sizeBytes: meta.sizeBytes });
-    } catch(e) { console.warn('파일 다운로드 실패:', meta.id, e); }
+      if (meta.fileData) {
+        const buf = base64ToArrayBuffer(meta.fileData);
+        results.push({ id: meta.id, fileName: meta.fileName, data: buf, savedAt: meta.savedAt, sizeBytes: meta.sizeBytes });
+      }
+    } catch(e) { console.warn('파일 디코딩 실패:', meta.id, e); }
   }
   return results;
 }
 
 async function dbDelete(collection, id) {
-  // 1) Storage에서 파일 삭제
-  try {
-    const doc = await fireDb.collection(collection).doc(id).get();
-    if (doc.exists && doc.data().path) {
-      await fireStorage.ref(doc.data().path).delete();
-    }
-  } catch(e) { console.warn('Storage 삭제 실패:', e); }
-  // 2) Firestore 문서 삭제
   await fireDb.collection(collection).doc(id).delete();
 }
 
@@ -563,16 +555,9 @@ async function loadSavedFile(type, id) {
     if (!doc.exists) { if(spEl) spEl.style.display='none'; return; }
     const meta = doc.data();
 
-    // Firebase Storage SDK로 다운로드
-    const dlUrl = await fireStorage.ref(meta.path).getDownloadURL();
-    const buf = await new Promise((resolve, reject) => {
-      const xhr = new XMLHttpRequest();
-      xhr.responseType = 'arraybuffer';
-      xhr.onload = () => resolve(xhr.response);
-      xhr.onerror = () => reject(new Error('다운로드 실패'));
-      xhr.open('GET', dlUrl);
-      xhr.send();
-    });
+    // Firestore에서 base64 데이터 디코딩
+    if (!meta.fileData) { if(spEl) spEl.style.display='none'; alert('이 파일은 이전 방식으로 저장되어 다시 업로드가 필요합니다.'); return; }
+    const buf = base64ToArrayBuffer(meta.fileData);
     const wb = XLSX.read(buf, { type: 'array' });
 
     if (type === 'profit') {
@@ -601,6 +586,7 @@ async function loadSavedFile(type, id) {
   } catch(e) {
     if (spEl) spEl.style.display = 'none';
     console.error('저장 파일 불러오기 실패:', e);
+    alert('파일 불러오기 실패: ' + (e.message || e));
   }
 }
 
