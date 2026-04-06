@@ -8,6 +8,9 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-storage-compat.js"></script>
 <style>
 /* ================================================================
    RESET & BASE
@@ -432,71 +435,83 @@ let finRaw = null;
 const FIN_COLORS = ['#3b82f6','#22c55e','#f59e0b','#a855f7','#06b6d4','#ef4444','#ec4899','#14b8a6'];
 
 // ================================================================
-// INDEXEDDB
+// FIREBASE 초기화
 // ================================================================
-const DB_NAME = 'DashboardDB_v1';
-const DB_VER  = 2;
-const ST_PROFIT      = 'profitFiles';
-const ST_FINANCE     = 'financeFiles';
-const ST_FIN_WEEKLY  = 'finWeeklyFiles';
-const ST_FIN_MONTHLY = 'finMonthlyFiles';
+firebase.initializeApp({
+  apiKey: "AIzaSyDukcWzGy6arw4I1VffY4QygLVzOEz-NHg",
+  authDomain: "finance-dashboard-a090d.firebaseapp.com",
+  projectId: "finance-dashboard-a090d",
+  storageBucket: "finance-dashboard-a090d.firebasestorage.app",
+  messagingSenderId: "27140461247",
+  appId: "1:27140461247:web:39a7a8e82affb717576c0a"
+});
+const fireDb = firebase.firestore();
+const fireStorage = firebase.storage();
 
-function openDB() {
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, DB_VER);
-    req.onupgradeneeded = e => {
-      const db = e.target.result;
-      if (!db.objectStoreNames.contains(ST_PROFIT))      db.createObjectStore(ST_PROFIT,      { keyPath:'id' });
-      if (!db.objectStoreNames.contains(ST_FINANCE))     db.createObjectStore(ST_FINANCE,     { keyPath:'id' });
-      if (!db.objectStoreNames.contains(ST_FIN_WEEKLY))  db.createObjectStore(ST_FIN_WEEKLY,  { keyPath:'id' });
-      if (!db.objectStoreNames.contains(ST_FIN_MONTHLY)) db.createObjectStore(ST_FIN_MONTHLY, { keyPath:'id' });
-    };
-    req.onsuccess = e => resolve(e.target.result);
-    req.onerror   = e => reject(e.target.error);
+// ================================================================
+// FIREBASE 저장/불러오기/삭제
+// ================================================================
+const ST_PROFIT  = 'profitFiles';
+const ST_FINANCE = 'financeFiles';
+
+async function dbSave(collection, id, fileName, arrayBuffer) {
+  // 1) Storage에 파일 업로드
+  const path = `${collection}/${id}.xlsx`;
+  const ref = fireStorage.ref(path);
+  const uint8 = new Uint8Array(arrayBuffer);
+  await ref.put(uint8, { contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const downloadURL = await ref.getDownloadURL();
+
+  // 2) Firestore에 메타데이터 저장
+  await fireDb.collection(collection).doc(id).set({
+    id, fileName, downloadURL, path,
+    sizeBytes: arrayBuffer.byteLength,
+    savedAt: new Date().toISOString()
   });
 }
 
-async function dbSave(store, id, fileName, arrayBuffer) {
-  const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(store, 'readwrite');
-    tx.objectStore(store).put({ id, fileName, data: arrayBuffer, savedAt: new Date().toISOString() });
-    tx.oncomplete = () => resolve();
-    tx.onerror    = e => reject(e.target.error);
-  });
+async function dbLoadAll(collection) {
+  const snap = await fireDb.collection(collection).orderBy('savedAt', 'desc').get();
+  const results = [];
+  for (const doc of snap.docs) {
+    const meta = doc.data();
+    try {
+      // Storage에서 파일 다운로드
+      const url = meta.downloadURL;
+      const resp = await fetch(url);
+      const buf = await resp.arrayBuffer();
+      results.push({ id: meta.id, fileName: meta.fileName, data: buf, savedAt: meta.savedAt, sizeBytes: meta.sizeBytes });
+    } catch(e) { console.warn('파일 다운로드 실패:', meta.id, e); }
+  }
+  return results;
 }
 
-async function dbLoadAll(store) {
-  const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const tx  = db.transaction(store, 'readonly');
-    const req = tx.objectStore(store).getAll();
-    req.onsuccess = e => resolve(e.target.result.sort((a,b) => b.savedAt.localeCompare(a.savedAt)));
-    req.onerror   = e => reject(e.target.error);
-  });
+async function dbDelete(collection, id) {
+  // 1) Storage에서 파일 삭제
+  try {
+    const doc = await fireDb.collection(collection).doc(id).get();
+    if (doc.exists && doc.data().path) {
+      await fireStorage.ref(doc.data().path).delete();
+    }
+  } catch(e) { console.warn('Storage 삭제 실패:', e); }
+  // 2) Firestore 문서 삭제
+  await fireDb.collection(collection).doc(id).delete();
 }
 
-async function dbDelete(store, id) {
-  const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(store, 'readwrite');
-    tx.objectStore(store).delete(id);
-    tx.oncomplete = () => resolve();
-    tx.onerror    = e => reject(e.target.error);
-  });
-}
-
-/** 저장된 파일 목록을 업로드 화면에 렌더링 */
+/** 저장된 파일 목록을 업로드 화면에 렌더링 (메타데이터만 조회 — 빠름) */
 async function refreshSavedList(type) {
-  const storeMap = {profit: ST_PROFIT, finance: ST_FINANCE};
-  const listMap  = {profit:'profitSavedList', finance:'financeSavedList'};
-  const iconMap  = {profit:'📊', finance:'💰'};
-  const store  = storeMap[type];
+  const collMap = {profit: ST_PROFIT, finance: ST_FINANCE};
+  const listMap = {profit:'profitSavedList', finance:'financeSavedList'};
+  const iconMap = {profit:'📊', finance:'💰'};
+  const coll   = collMap[type];
   const listEl = document.getElementById(listMap[type]);
-  if (!listEl || !store) return;
+  if (!listEl || !coll) return;
 
   let files = [];
-  try { files = await dbLoadAll(store); } catch(e) { return; }
+  try {
+    const snap = await fireDb.collection(coll).orderBy('savedAt', 'desc').get();
+    files = snap.docs.map(d => d.data());
+  } catch(e) { return; }
 
   if (!files.length) {
     listEl.innerHTML = '<div class="saved-empty">저장된 파일이 없습니다</div>';
@@ -506,13 +521,13 @@ async function refreshSavedList(type) {
   listEl.innerHTML = files.map(f => {
     const date = new Date(f.savedAt);
     const dateStr = `${date.getFullYear()}.${String(date.getMonth()+1).padStart(2,'0')}.${String(date.getDate()).padStart(2,'0')} ${String(date.getHours()).padStart(2,'0')}:${String(date.getMinutes()).padStart(2,'0')}`;
-    const sizeKb  = Math.round(f.data.byteLength / 1024);
+    const sizeKb = Math.round((f.sizeBytes||0) / 1024);
     return `
       <div class="saved-item" id="si_${f.id}">
         <span class="si-icon">${iconMap[type]||'📄'}</span>
         <div class="si-info">
           <div class="si-name" title="${f.fileName}">${f.fileName}</div>
-          <div class="si-meta">${dateStr} 저장 · ${sizeKb.toLocaleString()} KB</div>
+          <div class="si-meta">${dateStr} 저장 · ${sizeKb.toLocaleString()} KB · ☁️ 클라우드</div>
         </div>
         <div class="si-actions">
           <button class="si-load-btn" onclick="loadSavedFile('${type}','${f.id}')">불러오기</button>
@@ -522,30 +537,30 @@ async function refreshSavedList(type) {
   }).join('');
 }
 
-/** 저장된 파일 불러오기 */
+/** 저장된 파일 불러오기 (Firebase에서 다운로드) */
 async function loadSavedFile(type, id) {
-  const storeMap   = {profit: ST_PROFIT, finance: ST_FINANCE};
+  const collMap    = {profit: ST_PROFIT, finance: ST_FINANCE};
   const spinnerMap = {profit:'profitSpinner', finance:'financeSpinner'};
-  const store = storeMap[type];
-  const spEl  = document.getElementById(spinnerMap[type]);
+  const coll = collMap[type];
+  const spEl = document.getElementById(spinnerMap[type]);
   try {
-    const db   = await openDB();
-    const file = await new Promise((res, rej) => {
-      const tx  = db.transaction(store, 'readonly');
-      const req = tx.objectStore(store).get(id);
-      req.onsuccess = e => res(e.target.result);
-      req.onerror   = e => rej(e.target.error);
-    });
-    if (!file) return;
-
     if (spEl) spEl.style.display = 'block';
-    const wb = XLSX.read(file.data, { type: 'array' });
+
+    // Firestore에서 메타 조회
+    const doc = await fireDb.collection(coll).doc(id).get();
+    if (!doc.exists) { if(spEl) spEl.style.display='none'; return; }
+    const meta = doc.data();
+
+    // Storage에서 파일 다운로드
+    const resp = await fetch(meta.downloadURL);
+    const buf  = await resp.arrayBuffer();
+    const wb   = XLSX.read(buf, { type: 'array' });
 
     if (type === 'profit') {
       profitWorkbook = wb;
       const dz = document.getElementById('profitDropzone');
-      dz.querySelector('.dz-main').textContent = file.fileName;
-      dz.querySelector('.dz-hint').textContent  = '저장된 파일 불러옴';
+      dz.querySelector('.dz-main').textContent = meta.fileName;
+      dz.querySelector('.dz-hint').textContent  = '☁️ 클라우드에서 불러옴';
       const sd = document.getElementById('profitSheetDropdown');
       const ss = document.getElementById('profitSheetSelect');
       const gb = document.getElementById('profitGenerateBtn');
@@ -559,8 +574,8 @@ async function loadSavedFile(type, id) {
     } else {
       financeWorkbook = wb;
       const dz = document.getElementById('financeDropzone');
-      dz.querySelector('.dz-main').textContent = file.fileName;
-      dz.querySelector('.dz-hint').textContent  = '저장된 파일 불러옴';
+      dz.querySelector('.dz-main').textContent = meta.fileName;
+      dz.querySelector('.dz-hint').textContent  = '☁️ 클라우드에서 불러옴';
       await refreshFinanceMonthDropdown();
     }
     if (spEl) spEl.style.display = 'none';
@@ -570,13 +585,13 @@ async function loadSavedFile(type, id) {
   }
 }
 
-/** 저장된 파일 삭제 */
+/** 저장된 파일 삭제 (Firebase Storage + Firestore) */
 async function deleteSavedFile(type, id) {
   if (!confirm('이 파일을 삭제하시겠습니까?')) return;
-  const storeMap = {profit: ST_PROFIT, finance: ST_FINANCE};
-  const store = storeMap[type];
+  const collMap = {profit: ST_PROFIT, finance: ST_FINANCE};
+  const coll = collMap[type];
   try {
-    await dbDelete(store, id);
+    await dbDelete(coll, id);
     await refreshSavedList(type);
   } catch(e) { console.error('삭제 실패:', e); }
 }
