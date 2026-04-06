@@ -455,19 +455,25 @@ const ST_PROFIT  = 'profitFiles';
 const ST_FINANCE = 'financeFiles';
 
 async function dbSave(collection, id, fileName, arrayBuffer) {
-  // 1) Storage에 파일 업로드
-  const path = `${collection}/${id}.xlsx`;
-  const ref = fireStorage.ref(path);
-  const uint8 = new Uint8Array(arrayBuffer);
-  await ref.put(uint8, { contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-  const downloadURL = await ref.getDownloadURL();
+  try {
+    // 1) Storage에 파일 업로드 (Blob 변환)
+    const path = `${collection}/${id}.xlsx`;
+    const ref = fireStorage.ref(path);
+    const blob = new Blob([new Uint8Array(arrayBuffer)], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const snap = await ref.put(blob);
+    const downloadURL = await snap.ref.getDownloadURL();
 
-  // 2) Firestore에 메타데이터 저장
-  await fireDb.collection(collection).doc(id).set({
-    id, fileName, downloadURL, path,
-    sizeBytes: arrayBuffer.byteLength,
-    savedAt: new Date().toISOString()
-  });
+    // 2) Firestore에 메타데이터 저장
+    await fireDb.collection(collection).doc(id).set({
+      id, fileName, downloadURL, path,
+      sizeBytes: arrayBuffer.byteLength,
+      savedAt: new Date().toISOString()
+    });
+    console.log('Firebase 저장 성공:', id);
+  } catch(e) {
+    console.error('Firebase 저장 실패:', e);
+    throw e;
+  }
 }
 
 async function dbLoadAll(collection) {
