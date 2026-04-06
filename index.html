@@ -482,10 +482,16 @@ async function dbLoadAll(collection) {
   for (const doc of snap.docs) {
     const meta = doc.data();
     try {
-      // Storage에서 파일 다운로드
-      const url = meta.downloadURL;
-      const resp = await fetch(url);
-      const buf = await resp.arrayBuffer();
+      // Firebase Storage SDK로 다운로드 URL 가져오기
+      const url = await fireStorage.ref(meta.path).getDownloadURL();
+      const xhr = new XMLHttpRequest();
+      const buf = await new Promise((resolve, reject) => {
+        xhr.responseType = 'arraybuffer';
+        xhr.onload = () => resolve(xhr.response);
+        xhr.onerror = () => reject(new Error('다운로드 실패'));
+        xhr.open('GET', url);
+        xhr.send();
+      });
       results.push({ id: meta.id, fileName: meta.fileName, data: buf, savedAt: meta.savedAt, sizeBytes: meta.sizeBytes });
     } catch(e) { console.warn('파일 다운로드 실패:', meta.id, e); }
   }
@@ -557,10 +563,17 @@ async function loadSavedFile(type, id) {
     if (!doc.exists) { if(spEl) spEl.style.display='none'; return; }
     const meta = doc.data();
 
-    // Storage에서 파일 다운로드
-    const resp = await fetch(meta.downloadURL);
-    const buf  = await resp.arrayBuffer();
-    const wb   = XLSX.read(buf, { type: 'array' });
+    // Firebase Storage SDK로 다운로드
+    const dlUrl = await fireStorage.ref(meta.path).getDownloadURL();
+    const buf = await new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.responseType = 'arraybuffer';
+      xhr.onload = () => resolve(xhr.response);
+      xhr.onerror = () => reject(new Error('다운로드 실패'));
+      xhr.open('GET', dlUrl);
+      xhr.send();
+    });
+    const wb = XLSX.read(buf, { type: 'array' });
 
     if (type === 'profit') {
       profitWorkbook = wb;
