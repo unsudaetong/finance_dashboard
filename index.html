@@ -51,9 +51,60 @@ a{color:var(--blue2);text-decoration:none}
 .fade-in-d4{animation:fadeIn .5s .4s ease both}
 
 /* ================================================================
+   LOGIN SCREEN
+   ================================================================ */
+#loginScreen{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  min-height:100vh;animation:fadeIn .6s ease;
+  position:fixed;top:0;left:0;right:0;bottom:0;
+  background:var(--bg);z-index:9999;
+}
+.login-box{
+  background:var(--bg3);border:1px solid var(--border);border-radius:20px;
+  padding:48px 40px;width:100%;max-width:400px;text-align:center;
+  box-shadow:0 8px 40px rgba(0,0,0,.4);
+}
+.login-box .login-icon{font-size:48px;margin-bottom:16px;display:block}
+.login-box .login-title{
+  font-size:24px;font-weight:800;
+  background:linear-gradient(135deg,var(--blue3),var(--purple));
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+  margin-bottom:6px;
+}
+.login-box .login-sub{font-size:12px;color:var(--t3);margin-bottom:32px}
+.login-field{margin-bottom:16px;text-align:left}
+.login-field label{
+  display:block;font-size:11px;font-weight:600;color:var(--t2);
+  text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;
+}
+.login-field input{
+  width:100%;padding:12px 14px;background:var(--bg4);
+  border:1px solid var(--border);border-radius:8px;
+  color:var(--t1);font-size:14px;font-family:'Noto Sans KR',sans-serif;
+  outline:none;transition:border-color .2s;
+}
+.login-field input:focus{border-color:var(--blue)}
+.login-field input::placeholder{color:var(--t4)}
+.login-btn{
+  width:100%;padding:13px;margin-top:8px;
+  background:linear-gradient(135deg,var(--blue),#6366f1);
+  border:none;border-radius:10px;color:#fff;
+  font-size:15px;font-weight:700;cursor:pointer;
+  font-family:'Noto Sans KR',sans-serif;
+  transition:var(--anim);
+}
+.login-btn:hover{transform:translateY(-1px);box-shadow:0 4px 20px rgba(59,130,246,.35)}
+.login-btn:active{transform:translateY(0)}
+.login-error{
+  margin-top:14px;font-size:12px;color:var(--red2);
+  min-height:18px;transition:opacity .2s;
+}
+.login-footer{margin-top:24px;font-size:11px;color:var(--t4)}
+
+/* ================================================================
    HUB SCREEN
    ================================================================ */
-#hubScreen{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:85vh;animation:fadeIn .6s ease}
+#hubScreen{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:85vh;animation:fadeIn .6s ease;position:relative}
 .hub-title{font-size:32px;font-weight:800;background:linear-gradient(135deg,var(--blue3),var(--purple));-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:6px}
 .hub-sub{font-size:13px;color:var(--t3);margin-bottom:48px}
 .hub-cards{display:grid;grid-template-columns:repeat(3,1fr);gap:24px;max-width:960px;width:100%}
@@ -327,12 +378,47 @@ footer{text-align:center;font-size:10px;color:var(--t4);padding-top:16px;border-
 </style>
 </head>
 <body>
-<div class="wrap">
+
+<!-- ================================================================
+     LOGIN SCREEN
+     ================================================================ -->
+<div id="loginScreen">
+  <div class="login-box fade-in">
+    <span class="login-icon">🔐</span>
+    <div class="login-title">경영 분석 대시보드</div>
+    <div class="login-sub">로그인하여 대시보드에 접속하세요</div>
+    <form id="loginForm" onsubmit="return handleLogin(event)">
+      <div class="login-field">
+        <label>아이디</label>
+        <input type="text" id="loginId" placeholder="아이디를 입력하세요" autocomplete="username" required>
+      </div>
+      <div class="login-field">
+        <label>비밀번호</label>
+        <input type="password" id="loginPw" placeholder="비밀번호를 입력하세요" autocomplete="current-password" required>
+      </div>
+      <button type="submit" class="login-btn">로그인</button>
+    </form>
+    <div class="login-error" id="loginError"></div>
+    <div class="login-footer">© 2026 경영 분석 대시보드</div>
+  </div>
+</div>
+
+<div class="wrap" id="mainWrap" style="display:none">
 
 <!-- ================================================================
      HUB SCREEN
      ================================================================ -->
 <div id="hubScreen">
+  <div style="position:absolute;top:24px;right:28px">
+    <button onclick="logout()" style="
+      background:var(--bg4);border:1px solid var(--border);border-radius:8px;
+      color:var(--t2);padding:8px 16px;font-size:12px;font-weight:600;
+      cursor:pointer;font-family:'Noto Sans KR',sans-serif;transition:var(--anim);
+    " onmouseover="this.style.borderColor='var(--red)';this.style.color='var(--red2)'"
+       onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--t2)'">
+      🔓 로그아웃
+    </button>
+  </div>
   <div class="hub-title">경영 분석 대시보드</div>
   <div class="hub-sub">분석하려는 대시보드를 선택하세요</div>
   <div class="hub-cards" style="grid-template-columns:repeat(2,1fr)">
@@ -422,6 +508,55 @@ footer{text-align:center;font-size:10px;color:var(--t4);padding-top:16px;border-
 </div><!-- /.wrap -->
 
 <script>
+// ================================================================
+// LOGIN AUTHENTICATION
+// ================================================================
+const LOGIN_CREDENTIALS = [
+  { id: 'admin', pw: 'admin1234' }
+];
+
+function handleLogin(e) {
+  e.preventDefault();
+  const id = document.getElementById('loginId').value.trim();
+  const pw = document.getElementById('loginPw').value;
+  const errorEl = document.getElementById('loginError');
+
+  const matched = LOGIN_CREDENTIALS.find(c => c.id === id && c.pw === pw);
+  if (matched) {
+    sessionStorage.setItem('loggedIn', 'true');
+    sessionStorage.setItem('loginUser', id);
+    document.getElementById('loginScreen').style.display = 'none';
+    document.getElementById('mainWrap').style.display = '';
+    errorEl.textContent = '';
+  } else {
+    errorEl.textContent = '아이디 또는 비밀번호가 올바르지 않습니다.';
+    document.getElementById('loginPw').value = '';
+    document.getElementById('loginPw').focus();
+  }
+  return false;
+}
+
+function checkLogin() {
+  if (sessionStorage.getItem('loggedIn') === 'true') {
+    document.getElementById('loginScreen').style.display = 'none';
+    document.getElementById('mainWrap').style.display = '';
+  }
+}
+
+function logout() {
+  sessionStorage.removeItem('loggedIn');
+  sessionStorage.removeItem('loginUser');
+  document.getElementById('loginScreen').style.display = '';
+  document.getElementById('mainWrap').style.display = 'none';
+  document.getElementById('loginId').value = '';
+  document.getElementById('loginPw').value = '';
+  document.getElementById('loginError').textContent = '';
+  goHub();
+}
+
+// 페이지 로드 시 로그인 상태 확인
+window.addEventListener('DOMContentLoaded', checkLogin);
+
 // ================================================================
 // GLOBAL STATE
 // ================================================================
