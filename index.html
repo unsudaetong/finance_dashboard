@@ -809,10 +809,10 @@ function hideAll() {
         const buf = e.target.result;
         profitWorkbook = XLSX.read(buf, { type: 'array' });
         populateProfitSheets();
-        const id = 'profit_' + file.name.replace(/[^a-zA-Z0-9가-힣_-]/g, '_');
+        const id = 'profit_' + Date.now();
         await dbSave(ST_PROFIT, id, file.name, buf);
         await refreshSavedList('profit');
-        dz.querySelector('.dz-hint').textContent += ' · 💾 저장됨 (재업로드 시 자동 갱신)';
+        dz.querySelector('.dz-hint').textContent += ' · 💾 자동 저장됨';
       } catch(err) { showError('profitError', '파일을 읽을 수 없습니다: ' + err.message); }
       sp.style.display = 'none';
     };
@@ -830,56 +830,22 @@ function hideAll() {
     dz.querySelector('.dz-hint').textContent = `${profitWorkbook.SheetNames.length}개 시트 감지 · 수익계산 ${profitSheets.length}개`;
   }
 
-  async function loadAllProfitData() {
-    allMonthlyData = [];
-    const seenMonths = new Map();
-
+  gb.addEventListener('click', () => {
     try {
-      const saved = await dbLoadAll(ST_PROFIT);
-      for (const f of saved) {
-        try {
-          const wb = XLSX.read(f.data, { type: 'array' });
-          const sheets = wb.SheetNames.filter(n => n.includes('수익 계산') && !n.includes('회사수익'));
-          for (const sn of sheets) {
-            try {
-              const d = extractProfitData(wb, sn);
-              if (d.length) {
-                const info = parseSheetPeriod(sn);
-                const key = info.year * 100 + info.month;
-                if (!seenMonths.has(key) || f.savedAt > (seenMonths.get(key)._savedAt || '')) {
-                  seenMonths.set(key, { sheetName: sn, month: info.month, year: info.year, quarter: info.quarter, label: info.label, payLabel: info.payLabel, data: d, _savedAt: f.savedAt });
-                }
-              }
-            } catch(e) { console.warn('시트 파싱 실패:', sn, e); }
-          }
-        } catch(e) { console.warn('수익률 파일 파싱 실패:', e); }
-      }
-    } catch(e) { console.warn('저장된 파일 로드 실패:', e); }
-
-    if (profitWorkbook) {
-      const sheets = profitWorkbook.SheetNames.filter(n => n.includes('수익 계산') && !n.includes('회사수익'));
+      sp.style.display = 'block';
+      allMonthlyData = [];
+      const profitSheets = profitWorkbook.SheetNames.filter(n => n.includes('수익 계산') && !n.includes('회사수익'));
+      const sheets = profitSheets.length ? profitSheets : [sd.value];
       sheets.forEach(sn => {
         try {
           const d = extractProfitData(profitWorkbook, sn);
           if (d.length) {
             const info = parseSheetPeriod(sn);
-            const key = info.year * 100 + info.month;
-            if (!seenMonths.has(key)) {
-              seenMonths.set(key, { sheetName: sn, month: info.month, year: info.year, quarter: info.quarter, label: info.label, payLabel: info.payLabel, data: d, _savedAt: '' });
-            }
+            allMonthlyData.push({ sheetName: sn, month: info.month, year: info.year, quarter: info.quarter, label: info.label, payLabel: info.payLabel, data: d });
           }
         } catch(e) { console.warn('시트 파싱 실패:', sn, e); }
       });
-    }
-
-    allMonthlyData = Array.from(seenMonths.values()).map(m => { delete m._savedAt; return m; }).sort((a, b) => (a.year * 100 + a.month) - (b.year * 100 + b.month));
-    return allMonthlyData;
-  }
-
-  gb.addEventListener('click', async () => {
-    try {
-      sp.style.display = 'block';
-      await loadAllProfitData();
+      allMonthlyData.sort((a, b) => (a.year * 100 + a.month) - (b.year * 100 + b.month));
       if (!allMonthlyData.length) { showError('profitError', '유효한 센터 데이터를 찾을 수 없습니다.'); sp.style.display = 'none'; return; }
       const selIdx = allMonthlyData.findIndex(m => m.sheetName === sd.value);
       renderProfitDashboard(selIdx >= 0 ? selIdx : allMonthlyData.length - 1);
@@ -1279,10 +1245,7 @@ function renderProfitDashboard(selectedIdx) {
       <div class="top-bar-left">
         <button class="btn-secondary" onclick="showUpload('profit')">← 다른 파일</button>
         <h1>센터별 수익률 대시보드</h1>
-        <select id="profitMonthNav" style="margin-left:12px;padding:6px 10px;border-radius:6px;border:1px solid #334155;background:#1e293b;color:#e2e8f0;font-size:14px;cursor:pointer">
-          ${allMonthlyData.map((m, i) => `<option value="${i}" ${i === selectedIdx ? 'selected' : ''}>${m.label}${m.payLabel ? ' ('+m.payLabel+')' : ''}</option>`).join('')}
-        </select>
-        <span style="font-size:12px;color:#64748b;margin-left:8px">${allMonthlyData.length}개 월</span>
+        <span class="badge">${sel.label}${sel.payLabel ? ' · '+sel.payLabel : ''}</span>
       </div>
       <div class="top-bar-right">
         <div class="export-bar">
@@ -1307,10 +1270,6 @@ function renderProfitDashboard(selectedIdx) {
     </div>
     <footer>${sel.label} 수익 계산 시트 기반 · ${D.length}개 센터 · ${D.reduce((s,c)=>s+c.d,0)}명 기사 · ${allMonthlyData.length}개 월 데이터</footer>
   `;
-
-  document.getElementById('profitMonthNav').addEventListener('change', function() {
-    renderProfitDashboard(parseInt(this.value));
-  });
 
   dash.querySelectorAll('.tab-nav button').forEach(btn => {
     btn.addEventListener('click', function() {
