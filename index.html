@@ -1784,6 +1784,8 @@ function extractFinanceData(wb) {
       }
       const no=parseInt(c0);
       if (!isNaN(no) && c1 && typeof c2==='number') {
+        // 날짜/시간 패턴이 항목명에 들어있으면 손익계산서 항목이 아니므로 스킵
+        if (/^\d{4}[-/.]\d{1,2}[-/.]\d{1,2}/.test(c1) || /^\d{8}\s*\d{0,2}:/.test(c1)) continue;
         const pv = typeof c3==='number' ? c3 : parseFloat(String(c3||'0').replace('%',''))/100 || 0;
         const item={no, name:c1, amount:c2, pct:pv};
         if      (section==='rev')   out.revenue.push(item);
@@ -1801,6 +1803,23 @@ function extractFinanceData(wb) {
     if (!out.netIncome)  out.netIncome  = out.opIncome + out.nonOpTotal;
   }
 
+  const parseTxDate = (raw) => {
+    if (raw == null) return '';
+    // Excel 날짜 시리얼 (1900-01-01 = 1, 25569 = 1970-01-01)
+    if (typeof raw === 'number' && raw > 25569 && raw < 80000) {
+      const d = new Date(Math.round((raw - 25569) * 86400 * 1000));
+      return `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}-${String(d.getUTCDate()).padStart(2,'0')}`;
+    }
+    const s = String(raw).trim();
+    // YYYYMMDD (8자리 숫자)
+    let m = s.match(/^(\d{4})(\d{2})(\d{2})/);
+    if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+    // YYYY-MM-DD / YYYY/MM/DD / YYYY.MM.DD (시:분 포함 가능)
+    m = s.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+    if (m) return `${m[1]}-${m[2].padStart(2,'0')}-${m[3].padStart(2,'0')}`;
+    return s.slice(0, 10);
+  };
+
   const txName = wb.SheetNames.find(n=>n.includes('거래통합'));
   if (txName) {
     const raw = XLSX.utils.sheet_to_json(wb.Sheets[txName], {header:1, defval:null});
@@ -1809,9 +1828,8 @@ function extractFinanceData(wb) {
     for (let r=hRow+1;r<raw.length;r++) {
       const row=raw[r]||[];
       if (!row[0]) continue;
-      const ds=String(row[0]||'');
       out.transactions.push({
-        date: ds.slice(0,8).replace(/(\d{4})(\d{2})(\d{2})/,'$1-$2-$3'),
+        date: parseTxDate(row[0]),
         out:  typeof row[1]==='number'?row[1]:0,
         in:   typeof row[2]==='number'?row[2]:0,
         desc: String(row[3]||''),
