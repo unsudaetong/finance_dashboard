@@ -184,6 +184,8 @@ a{color:var(--blue2);text-decoration:none}
 .si-load-btn:hover{background:#2563eb}
 .si-del-btn{padding:5px 10px;background:transparent;border:1px solid var(--border);border-radius:6px;color:var(--t3);font-size:11px;cursor:pointer;font-family:'Noto Sans KR',sans-serif;transition:var(--anim)}
 .si-del-btn:hover{border-color:var(--red);color:var(--red2)}
+.si-dl-btn{padding:5px 10px;background:transparent;border:1px solid var(--border);border-radius:6px;color:var(--t3);font-size:11px;cursor:pointer;font-family:'Noto Sans KR',sans-serif;transition:var(--anim)}
+.si-dl-btn:hover{border-color:var(--green);color:var(--green2)}
 .saved-empty{font-size:12px;color:var(--t4);text-align:center;padding:16px 0}
 
 /* ================================================================
@@ -692,6 +694,7 @@ async function refreshSavedList(type) {
         </div>
         <div class="si-actions">
           <button class="si-load-btn" onclick="loadSavedFile('${type}','${f.id}')">불러오기</button>
+          <button class="si-dl-btn"   onclick="downloadSavedFile('${type}','${f.id}')">⬇ 다운로드</button>
           <button class="si-del-btn"  onclick="deleteSavedFile('${type}','${f.id}')">삭제</button>
         </div>
       </div>`;
@@ -744,6 +747,34 @@ async function loadSavedFile(type, id) {
     if (spEl) spEl.style.display = 'none';
     console.error('저장 파일 불러오기 실패:', e);
     alert('파일 불러오기 실패: ' + (e.message || e));
+  }
+}
+
+/** 저장된 파일을 원본 엑셀(.xlsx)로 다운로드 */
+async function downloadSavedFile(type, id) {
+  const collMap = {profit: ST_PROFIT, finance: ST_FINANCE};
+  const coll = collMap[type];
+  if (!coll) return;
+  try {
+    const doc = await fireDb.collection(coll).doc(id).get();
+    if (!doc.exists) { alert('파일을 찾을 수 없습니다.'); return; }
+    const meta = doc.data();
+    if (!meta.fileData) { alert('이 파일은 이전 방식으로 저장되어 다운로드할 수 없습니다. 다시 업로드해 주세요.'); return; }
+    const buf  = base64ToArrayBuffer(meta.fileData);
+    const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    let name = meta.fileName || (id + '.xlsx');
+    if (!/\.xlsx?$/i.test(name)) name += '.xlsx';
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 3000);
+  } catch(e) {
+    console.error('다운로드 실패:', e);
+    alert('다운로드 실패: ' + (e.message || e));
   }
 }
 
