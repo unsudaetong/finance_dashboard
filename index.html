@@ -184,6 +184,8 @@ a{color:var(--blue2);text-decoration:none}
 .si-load-btn:hover{background:#2563eb}
 .si-del-btn{padding:5px 10px;background:transparent;border:1px solid var(--border);border-radius:6px;color:var(--t3);font-size:11px;cursor:pointer;font-family:'Noto Sans KR',sans-serif;transition:var(--anim)}
 .si-del-btn:hover{border-color:var(--red);color:var(--red2)}
+.si-dl-btn{padding:5px 10px;background:transparent;border:1px solid var(--border);border-radius:6px;color:var(--t3);font-size:11px;cursor:pointer;font-family:'Noto Sans KR',sans-serif;transition:var(--anim)}
+.si-dl-btn:hover{border-color:var(--green);color:var(--green2)}
 .saved-empty{font-size:12px;color:var(--t4);text-align:center;padding:16px 0}
 
 /* ================================================================
@@ -692,6 +694,7 @@ async function refreshSavedList(type) {
         </div>
         <div class="si-actions">
           <button class="si-load-btn" onclick="loadSavedFile('${type}','${f.id}')">불러오기</button>
+          <button class="si-dl-btn"   onclick="downloadSavedFile('${type}','${f.id}')">⬇ 다운로드</button>
           <button class="si-del-btn"  onclick="deleteSavedFile('${type}','${f.id}')">삭제</button>
         </div>
       </div>`;
@@ -744,6 +747,34 @@ async function loadSavedFile(type, id) {
     if (spEl) spEl.style.display = 'none';
     console.error('저장 파일 불러오기 실패:', e);
     alert('파일 불러오기 실패: ' + (e.message || e));
+  }
+}
+
+/** 저장된 파일을 원본 엑셀(.xlsx)로 다운로드 */
+async function downloadSavedFile(type, id) {
+  const collMap = {profit: ST_PROFIT, finance: ST_FINANCE};
+  const coll = collMap[type];
+  if (!coll) return;
+  try {
+    const doc = await fireDb.collection(coll).doc(id).get();
+    if (!doc.exists) { alert('파일을 찾을 수 없습니다.'); return; }
+    const meta = doc.data();
+    if (!meta.fileData) { alert('이 파일은 이전 방식으로 저장되어 다운로드할 수 없습니다. 다시 업로드해 주세요.'); return; }
+    const buf  = base64ToArrayBuffer(meta.fileData);
+    const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    let name = meta.fileName || (id + '.xlsx');
+    if (!/\.xlsx?$/i.test(name)) name += '.xlsx';
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 3000);
+  } catch(e) {
+    console.error('다운로드 실패:', e);
+    alert('다운로드 실패: ' + (e.message || e));
   }
 }
 
@@ -1767,10 +1798,23 @@ function extractFinanceData(wb) {
       const row=raw[r]||[];
       const c0=String(row[0]||'').trim(), c1=String(row[1]||'').trim(), c2=row[2], c3=row[3];
       const txt=c0+c1;
-      if (/Ⅰ|매출액/.test(txt) && !/원가|합계/.test(txt))           { section='rev'; continue; }
-      if (/Ⅱ|매출원가/.test(txt))                                    { section='cogs'; continue; }
-      if (/Ⅲ|판매비|판관비/.test(txt))                               { section='sga'; continue; }
-      if (/Ⅳ|영업외/.test(txt))                                      { section='nonOp'; continue; }
+      const no=parseInt(c0);
+      // 항목 행(번호+계정명+숫자금액)을 먼저 판정 — '기타판관비'처럼 계정명에
+      // 섹션 키워드가 포함된 항목이 섹션 헤더로 오인되어 누락되는 문제 방지
+      if (!isNaN(no) && c1 && typeof c2==='number') {
+        // 날짜/시간 패턴이 항목명에 들어있으면 손익계산서 항목이 아니므로 스킵
+        if (/^\d{4}[-/.]\d{1,2}[-/.]\d{1,2}/.test(c1) || /^\d{8}\s*\d{0,2}:/.test(c1)) continue;
+        if (!section) continue;
+        const pv = typeof c3==='number' ? c3 : parseFloat(String(c3||'0').replace('%',''))/100 || 0;
+        const item={no, name:c1, amount:c2, pct:pv};
+        if      (section==='rev')   out.revenue.push(item);
+        else if (section==='cogs')  out.cogs.push(item);
+        else if (section==='sga')   out.sga.push(item);
+        else if (section==='nonOp') out.nonOp.push(item);
+        continue;
+      }
+      if (/B\/S|재무활동/.test(txt)) { section=''; continue; }  // B/S 항목은 손익에서 제외
+      // 합계 판정을 섹션 판정보다 먼저 — 'Ⅱ. 매출원가 합계' 등이 섹션 전환으로 오인되지 않도록
       if (/합계|◈/.test(txt)) {
         const a = typeof c2==='number' ? c2 : 0;
         if (/매출액.*합계|Ⅰ.*합계/.test(txt)||txt==='매출액합계') out.revTotal=a;
@@ -1782,17 +1826,10 @@ function extractFinanceData(wb) {
         if (/영업외.*합계|Ⅳ.*합계/.test(txt))                      out.nonOpTotal=a;
         continue;
       }
-      const no=parseInt(c0);
-      if (!isNaN(no) && c1 && typeof c2==='number') {
-        // 날짜/시간 패턴이 항목명에 들어있으면 손익계산서 항목이 아니므로 스킵
-        if (/^\d{4}[-/.]\d{1,2}[-/.]\d{1,2}/.test(c1) || /^\d{8}\s*\d{0,2}:/.test(c1)) continue;
-        const pv = typeof c3==='number' ? c3 : parseFloat(String(c3||'0').replace('%',''))/100 || 0;
-        const item={no, name:c1, amount:c2, pct:pv};
-        if      (section==='rev')   out.revenue.push(item);
-        else if (section==='cogs')  out.cogs.push(item);
-        else if (section==='sga')   out.sga.push(item);
-        else if (section==='nonOp') out.nonOp.push(item);
-      }
+      if (/Ⅰ|매출액/.test(txt) && !/원가/.test(txt))                { section='rev'; continue; }
+      if (/Ⅱ|매출원가/.test(txt))                                    { section='cogs'; continue; }
+      if (/Ⅲ|판매비|판관비/.test(txt))                               { section='sga'; continue; }
+      if (/Ⅳ|영업외/.test(txt))                                      { section='nonOp'; continue; }
     }
     if (!out.revTotal)   out.revTotal   = out.revenue.reduce((s,i)=>s+i.amount,0);
     if (!out.cogsTotal)  out.cogsTotal  = out.cogs.reduce((s,i)=>s+i.amount,0);
@@ -1828,8 +1865,10 @@ function extractFinanceData(wb) {
     for (let r=hRow+1;r<raw.length;r++) {
       const row=raw[r]||[];
       if (!row[0]) continue;
+      const txDate = parseTxDate(row[0]);
+      if (!/^\d{4}-\d{2}-\d{2}/.test(txDate)) continue;  // 안내문 등 비거래 행 스킵
       out.transactions.push({
-        date: parseTxDate(row[0]),
+        date: txDate,
         out:  typeof row[1]==='number'?row[1]:0,
         in:   typeof row[2]==='number'?row[2]:0,
         desc: String(row[3]||''),
@@ -1923,7 +1962,8 @@ function extractFinanceData(wb) {
     Object.values(acctMap).forEach(a=>{
       if(a.end===0 && (a.prev>0||a.totalIn>0)) a.end=a.prev+a.totalIn-a.totalOut;
     });
-    out.accounts=Object.values(acctMap);
+    // 잔액·거래가 전혀 없는 항목(양식 안내행 등)은 자금 현황에서 제외
+    out.accounts=Object.values(acctMap).filter(a=>a.prev||a.end||a.totalIn||a.totalOut);
   }
   if (!out.accounts.length && out.transactions.length) {
     const bkMap={};
