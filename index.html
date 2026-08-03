@@ -1834,8 +1834,10 @@ function extractFinanceData(wb) {
     for (let r=hRow+1;r<raw.length;r++) {
       const row=raw[r]||[];
       if (!row[0]) continue;
+      const txDate = parseTxDate(row[0]);
+      if (!/^\d{4}-\d{2}-\d{2}/.test(txDate)) continue;  // 안내문 등 비거래 행 스킵
       out.transactions.push({
-        date: parseTxDate(row[0]),
+        date: txDate,
         out:  typeof row[1]==='number'?row[1]:0,
         in:   typeof row[2]==='number'?row[2]:0,
         desc: String(row[3]||''),
@@ -1929,7 +1931,8 @@ function extractFinanceData(wb) {
     Object.values(acctMap).forEach(a=>{
       if(a.end===0 && (a.prev>0||a.totalIn>0)) a.end=a.prev+a.totalIn-a.totalOut;
     });
-    out.accounts=Object.values(acctMap);
+    // 잔액·거래가 전혀 없는 항목(양식 안내행 등)은 자금 현황에서 제외
+    out.accounts=Object.values(acctMap).filter(a=>a.prev||a.end||a.totalIn||a.totalOut);
   }
   if (!out.accounts.length && out.transactions.length) {
     const bkMap={};
